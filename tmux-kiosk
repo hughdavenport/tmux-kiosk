@@ -1,0 +1,224 @@
+#!/bin/bash
+
+set -euo pipefail
+
+if [[ -n "${TMUX+x}" ]]; then
+    # Emulator can keep $TMUX, so pass a flag 
+    if (($# > 0)) && [[ "$1" == "--ignore-tmux" ]]; then
+        shift
+    else
+        exec x-terminal-emulator -e "$0" --ignore-tmux "$@" &>/dev/null &
+        exit
+    fi
+elif (($# > 0)) && [[ "$1" == "--ignore-tmux" ]]; then
+    shift
+fi
+
+error() {
+    echo "tmux-kiosk: [OPTION]... [--] shell-command [shell-command-args]" >&2
+    echo >&2
+    echo "    -S session      Set session name" >&2
+    echo "    -c dir          Set working directory" >&2
+    echo "    -A              Attach to existing session without creating new window" >&2
+    echo >&2
+    echo "    shell-command   Run this command inside tmux, along with any addition arguments" >&2
+    echo >&2
+    echo "$1" >&2
+    exit 1
+}
+
+if (($# == 0)); then error "shell-command is required"; fi
+
+declare -a COMMAND
+
+while (($#)); do
+    case "$1" in
+        -S) SESSION=$2; shift 2 ;;
+        -c) DIR=$2; shift 2 ;;
+        -A) ATTACH=1; shift ;;
+        --) shift ;;
+        -*) error "Unknown option $1" ;;
+        *) COMMAND+=("$(printf %q "$1")"); shift ;;
+    esac
+done
+
+if [[ -z "${COMMAND+x}" ]]; then error "shell-command is required"; fi
+
+DIR="${DIR-$(pwd)}"
+cd "$DIR"
+if ! command -v "${COMMAND[0]}" >/dev/null; then error "Command ${COMMAND[0]} is not executable"; fi
+
+SESSION="${SESSION-kiosk-$(uuidgen)}"
+TABLE="$SESSION"
+
+cleanup() {
+    set +euo pipefail
+    if [[ -n "${PV_PIPE+x}" ]]; then rm -f "$PV_PIPE" >&/dev/null; fi
+    exec 3>&- 2>/dev/null || true &
+    if [[ -z "${FINISHED_BINDING+x}" ]] \
+            || (! tmux list-windows -t "=$SESSION" -F "#{pane_dead}" 2>/dev/null | grep 0 >&/dev/null \
+                && ! tmux list-clients -t "=$SESSION" -F "connected" 2>/dev/null | grep "connected" >&/dev/null); then
+        echo "No alive windows left and no connected clients or bind table in bad state, killing session" 2>/dev/null || true
+        tmux unbind-key -T "$TABLE" -a >&/dev/null || true
+        tmux kill-session -t "=$SESSION" >&/dev/null || true
+    fi
+}
+
+trap cleanup SIGINT SIGTERM EXIT ERR
+
+# Function to bind a key to no-op in the kiosk table
+_bind_noop() {
+    tmux bind-key -T "$TABLE" "$1" switch-client -t "=$SESSION" -T "$TABLE" &>/dev/null || true
+    echo -n '.' >&3
+}
+bind_noop() {
+    _bind_noop "$1"
+    _bind_noop "C-$1"
+    _bind_noop "M-$1"
+    _bind_noop "S-$1"
+    _bind_noop "C-M-$1"
+    _bind_noop "C-S-$1"
+    _bind_noop "M-S-$1"
+    _bind_noop "C-M-S-$1"
+}
+
+start_progress() {
+    if command -v pv >/dev/null; then
+        PV="(pv -s $NUM_BINDS -p -t -e $PV_PIPE) >/dev/null"
+    else
+        # shellcheck disable=SC2016     # `pv` is just for style, not to run in subshell 
+        echo '`pv` not installed.'
+        COLS=$(tput cols)
+        COLS=${COLS+$((COLS*5/10))}
+        COLS=${COLS-100}
+        PRINT_EVERY=$(printf '%.0f' "$(echo "scale=1; 0.5+($NUM_BINDS/($COLS-2))" | bc)")
+        [[ "$PRINT_EVERY" -eq 0 ]] && PRINT_EVERY=1
+        COLS=$((NUM_BINDS/PRINT_EVERY))
+        printf '[%*s]\r[' $COLS ''
+        PV="(while IFS= read -r -n $PRINT_EVERY line; do echo -n '.'; done < $PV_PIPE); printf '\r\f'"
+    fi
+    eval "$PV" &
+    exec 3>"$PV_PIPE"
+}
+
+define_kiosk_lock_bindings() {
+    echo "Locking down kiosk mode for session $SESSION"
+    PV_PIPE=$(mktemp --dry-run)
+    mkfifo "$PV_PIPE"
+
+    NUM_BINDS=1776 # Should be static, but needs changing if new additions of binds
+    start_progress
+
+    # Clear special keys on thinkpad
+    for key in Escape        Home End Insert Delete \
+                                             BSpace \
+               Tab                            Enter \
+                                 PageUp Up PageDown \
+                       Space      Left Down Right; do
+        bind_noop "$key"
+    done
+
+    # shellcheck disable=SC1003    # The '\' is correct for the slash. shellcheck thinks is is escaping the quote
+    for key in '~' '!' '@' '#' '$' '%' '^' '&' '*' '(' ')' '_' '+' '`' '-' '=' \
+               '{' '}' '|' '[' ']' '\' ':' '"' '\;' "'" '<' '>' '?' ',' '.' '/'; do
+        bind_noop "$key"
+    done
+    
+    local keys=( {a..z} {A..Z} {0..9} )
+    for key in "${keys[@]}"; do
+        bind_noop "$key"
+    done
+
+    # Function keys
+    for key in {1..12}; do
+        bind_noop "F$key"
+    done
+
+    # Leave WheelUp for scroll
+    for loc in {Pane,Border,Status{,Left,Right},Border}; do
+        for key in {Wheel{Down,Up},Mouse{Down,Up}{1,2,3},{Second,Double,Triple}Click{1,2,3}}$loc; do
+            [[ "$key" == WheelUpPane ]] && continue
+            bind_noop "$key"
+        done
+    done
+     
+    exec 3>&-
+    rm -f "$PV_PIPE"
+    echo
+}
+
+define_kiosk_custom_bindings() {
+    echo "Defining custom keys for session $SESSION"
+
+    # Custom kiosk actions
+    tmux bind-key -T "$TABLE" -N "Show keys" '?' list-keys -N -T "$TABLE"
+    tmux bind-key -T "$TABLE" -N "Kill and detach" x "confirm-before -p 'Kill window and detach? (y/n)' \
+                                                     \"if-shell '[ \$(tmux list-windows -t \"=$SESSION\" | tee /tmp/panes | wc -l) -eq 1 ]' \
+                                                         'kill-window' \
+                                                         'kill-window \; detach-client'\" \
+                                                     ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux bind-key -T "$TABLE" -N "Kill" X "confirm-before -p 'Kill window? (y/n)' 'kill-window' ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux bind-key -T "$TABLE" -N "Restart" r "respawn-pane -t \"=$SESSION\"; switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux bind-key -T "$TABLE" -N "Detach" d "confirm-before -p 'Detach client? (y/n)' 'detach-client' ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux bind-key -T "$TABLE" -N "Next window" n "next-window"
+    tmux bind-key -T "$TABLE" -N "Previous window" p "previous-window"
+}
+
+define_kiosk_bindings() {
+    if tmux list-keys -T "$TABLE" &>/dev/null; then return; fi
+
+    define_kiosk_lock_bindings
+    define_kiosk_custom_bindings
+
+    FINISHED_BINDING=1
+}
+
+debug_bindings() {
+    echo "Defining debug keys for session $SESSION"
+    tmux bind-key -T "$TABLE" -N "DEBUG: Customise" C "customize-mode"
+    tmux bind-key -T "$TABLE" -N "DEBUG: Command prompt" : "command-prompt ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
+}
+
+clear_prefix() {
+    tmux set-option -t "$SESSION" prefix None
+    tmux set-option -t "$SESSION" prefix2 None
+}
+
+setup_hooks() {
+    tmux set-hook -t "$SESSION" client-attached "switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux set-hook -t "$SESSION" pane-died "switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux set-hook -t "$SESSION" after-select-window "switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux set-hook -t "$SESSION" after-copy-mode "switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux set-hook -t "$SESSION" after-send-keys "if -F '#{pane_in_mode}' '' 'switch-client -t \"=$SESSION\" -T \"$TABLE\"'"
+    tmux set-hook -t "$SESSION" window-renamed "if -F '#{pane_in_mode}' '' 'switch-client -t \"=$SESSION\" -T \"$TABLE\"'"
+
+    # Custom hook, see https://github.com/tmux/tmux/pull/3973. Without the next/previous will revert to root (with no prefix). Can return to kiosk by moving mouse ¯\_(ツ)_/¯
+    if tmux show-hooks -g | grep -q after-error; then tmux set-hook -t "$SESSION" after-error "if -F '#{pane_in_mode}' '' 'switch-client -t \"=$SESSION\" -T \"$TABLE\"'"; fi
+}
+
+new_session() {
+    tmux new-session -s "$SESSION" -c "$DIR" -d bash -c "echo Running ${COMMAND[*]}; ${COMMAND[*]}"
+    tmux set-option -t "=$SESSION:0" remain-on-exit on
+
+    clear_prefix
+    setup_hooks
+
+    define_kiosk_bindings
+    if [[ -n "${TMUX_KIOSK_DEBUG+x}" ]]; then debug_bindings; fi
+}
+
+# Check if the tmux session exists
+if tmux has-session -t "=$SESSION" 2>/dev/null; then
+    FINISHED_BINDING=1     # Used in a trap. Session already exists, so bindings should be in place
+
+    # Session exists, create a new window unless -A option given
+    if [[ -z "${ATTACH+x}" ]]; then
+        WINDOW=$(tmux new-window -t "=$SESSION" -c "$DIR" -PF "#{window_index}" bash -c "echo Running ${COMMAND[*]}; ${COMMAND[*]}")
+        tmux set-option -t "=$SESSION:$WINDOW" remain-on-exit on
+    fi
+
+    if [[ -n "${TMUX_KIOSK_DEBUG+x}" ]]; then debug_bindings; fi
+else
+    new_session
+fi
+tmux attach -t "=$SESSION"
