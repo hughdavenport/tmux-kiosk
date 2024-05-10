@@ -158,7 +158,10 @@ define_kiosk_custom_bindings() {
                                                          'kill-window \; detach-client'\" \
                                                      ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
     tmux bind-key -T "$TABLE" -N "Kill" X "confirm-before -p 'Kill window? (y/n)' 'kill-window' ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
-    tmux bind-key -T "$TABLE" -N "Restart" r "respawn-pane -t \"=$SESSION\"; switch-client -t \"=$SESSION\" -T \"$TABLE\""
+    tmux bind-key -T "$TABLE" -N "Restart the current window with command: ${COMMAND[*]}" r \
+        "confirm-before -p 'Restart window with command: ${COMMAND[*]}? (y/n)' \
+            'respawn-window -k -t \"=$SESSION\"' ; \
+        switch-client -t \"=$SESSION\" -T \"$TABLE\""
     tmux bind-key -T "$TABLE" -N "Detach" d "confirm-before -p 'Detach client? (y/n)' 'detach-client' ; switch-client -t \"=$SESSION\" -T \"$TABLE\""
     tmux bind-key -T "$TABLE" -N "Next window" n "next-window"
     tmux bind-key -T "$TABLE" -N "Previous window" p "previous-window"
