@@ -200,7 +200,7 @@ setup_hooks() {
 }
 
 new_session() {
-    tmux new-session -s "$SESSION" -c "$DIR" -d bash -c "echo Running ${COMMAND[*]}; ${COMMAND[*]}"
+    tmux new-session -s "$SESSION" -c "$DIR" -d bash -c "echo Running ${COMMAND[*]}; sleep 1; ${COMMAND[*]}"
     tmux set-option -t "=$SESSION:0" remain-on-exit on
 
     clear_prefix
@@ -216,7 +216,7 @@ if tmux has-session -t "=$SESSION" 2>/dev/null; then
 
     # Session exists, create a new window unless -A option given
     if [[ -z "${ATTACH+x}" ]]; then
-        WINDOW=$(tmux new-window -t "=$SESSION" -c "$DIR" -PF "#{window_index}" bash -c "echo Running ${COMMAND[*]}; ${COMMAND[*]}")
+        WINDOW=$(tmux new-window -t "=$SESSION" -c "$DIR" -PF "#{window_index}" bash -c "echo Running ${COMMAND[*]}; sleep 1; ${COMMAND[*]}")
         tmux set-option -t "=$SESSION:$WINDOW" remain-on-exit on
     fi
 
