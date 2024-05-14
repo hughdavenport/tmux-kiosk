@@ -196,7 +196,7 @@ setup_hooks() {
     tmux set-hook -t "$SESSION" window-renamed "if -F '#{pane_in_mode}' '' 'switch-client -t \"=$SESSION\" -T \"$TABLE\"'"
 
     # Custom hook, see https://github.com/tmux/tmux/pull/3973. Without the next/previous will revert to root (with no prefix). Can return to kiosk by moving mouse ¯\_(ツ)_/¯
-    if tmux show-hooks -g | grep -q after-error; then tmux set-hook -t "$SESSION" after-error "if -F '#{pane_in_mode}' '' 'switch-client -t \"=$SESSION\" -T \"$TABLE\"'"; fi
+    if tmux show-hooks -g | grep -q command-error; then tmux set-hook -t "$SESSION" command-error "if -F '#{pane_in_mode}' '' 'switch-client -t \"=$SESSION\" -T \"$TABLE\"'"; fi
 }
 
 new_session() {

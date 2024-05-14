@@ -16,7 +16,7 @@ In kiosk mode, there is no `prefix`, you can't interact with the running command
 - `n`: Next window
 - `p`: Previous window
 
-No `prefix` is needed (and won't work). There is a patch implementing [a hook for after-error](https://github.com/tmux/tmux/pull/3973),
+No `prefix` is needed (and won't work). There is a patch implementing [a hook for command-error](https://github.com/tmux/tmux/pull/3973),
 without which there are some cases that the `root` key table is selected (but without a `prefix`). If this happens, scrolling the
 mouse up and down should return the user to the kiosk key table.
 
